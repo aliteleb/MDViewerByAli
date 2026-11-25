@@ -1,0 +1,7 @@
+/target
+/dist
+/gpui-version
+.qmlls.ini
+**/*.rs.bk
+.DS_Store
+Thumbs.db

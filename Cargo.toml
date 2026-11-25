@@ -1,0 +1,43 @@
+[package]
+name = "mdviewer-by-ali"
+version = "0.2.0"
+edition = "2024"
+description = "MDViewerByAli — Native Offline Markdown & Mermaid Viewer (Rust + WebView2)"
+license = "MIT"
+repository = "https://github.com/aliteleb/MDViewerByAli"
+readme = "README.md"
+
+[[bin]]
+name = "mdviewer-by-ali"
+path = "src/main.rs"
+
+[dependencies]
+http = "1.1"
+notify = "9"
+pulldown-cmark = "0.13"
+rfd = "0.18"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tao = "0.38"
+wry = "0.58"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+embed-resource = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
