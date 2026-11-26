@@ -11,7 +11,12 @@ A fast, 100% offline Windows desktop **Markdown**, **KaTeX Math**, and **Mermaid
 - **File Tree & Outline Sidebar** — Toggleable sidebar switching between **Outline** (interactive ToC with scroll sync) and **Files** (`Ctrl+Shift+O` folder browser with live filter, collapsible directories, and drag-and-drop folders).
 - **Rich Markdown & Table UX** — GitHub Alerts/Callouts (`[!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`), sticky table headers (`position: sticky`), bare URL autolinking, internal `#anchor` & relative `.md` link navigation.
 - **Interactive Zoom Lightbox** — Click any Mermaid diagram or image to open a full-screen pan/zoom lightbox.
-- **Live Reload & PDF Export** — Automatic reload on external file edits (`notify`), Dark/Light themes with Windows DWM titlebar sync, and clean PDF export (`Ctrl+P`).
+- **Live Reload, Print & PDF Studio (`Ctrl+P` / `Ctrl+Shift+P`)** — Automatic reload on external file edits (`notify`), Dark/Light themes with Windows DWM titlebar sync, and a branded Print & PDF Export Studio modal with instant paper preview, Dark/Light print appearance, zero browser headers/footers, Windows printer selection, silent printing, direct PDF export, and persistent saved print settings.
+- **Inline Split Editor (`Ctrl+E`) & Live Preview** — Side-by-side Markdown editing with draggable split divider, formatting toolbar, proportional scroll sync, dirty indicator, and `Ctrl+S` Save / Save As.
+- **Offline Arabic & English Fonts + Typography Controls** — Bundled offline font switcher (`IBM Plex Sans Arabic`, `Cairo`, `Tajawal`, `Amiri`, `Inter`, `Merriweather`, `System Default`, `Monospace`) and Line Spacing (`Compact`, `Normal`, `Relaxed`), persisted across sessions and mirrored into printing/PDF export.
+- **GitHub Markdown Parity** — YAML Frontmatter metadata table, fenced ```` ```math ```` / ```` ```latex ```` blocks, GitHub-style ```` ```diff ```` highlighting, ~140 offline `:emoji:` shortcodes, heading `#` anchor links, bare email autolinking, `#gh-dark-mode-only` / `#gh-light-mode-only` image variants, Raw view (`Ctrl+U`) with Copy Raw, and persistent Wide reading mode.
+- **Single-Instance Tab Handoff** — Opening `.md`/`.mermaid` files from Windows File Explorer opens them as new tabs inside the running window instead of spawning duplicate windows.
+- **Refined Eye-Comfort UI** — Compact icon-driven toolbar, softer Dark/Light palettes, file-tree & tab icons, and floating rounded ToC highlights.
 - **Windows File Associations** — Dedicated icons and Open With registration for `.md`, `.markdown`, `.mmd`, and `.mermaid`.
 
 ## Keyboard Shortcuts
@@ -23,13 +28,17 @@ A fast, 100% offline Windows desktop **Markdown**, **KaTeX Math**, and **Mermaid
 | `Ctrl + T` | New tab |
 | `Ctrl + W` | Close current tab |
 | `Ctrl + B` | Toggle Sidebar (Outline / Files) |
+| `Ctrl + E` | Toggle Inline Split Editor |
+| `Ctrl + S` | Save file (when editing) |
+| `Ctrl + U` | Toggle Raw Markdown view |
 | `Ctrl + F` | Find in document |
 | `Ctrl + P` | Print / Export PDF |
+| `Ctrl + Shift + P` | Print / Export PDF (quick PDF mode) |
 | `Ctrl + +` / `Ctrl + -` / `Ctrl + 0` | Zoom in / out / reset |
 
 ## Download & Install
 
-Download the latest Windows installer (`MDViewerByAli-0.2.0-Setup.exe`) from the [Releases](https://github.com/aliteleb/MDViewerByAli/releases) page.
+Download the latest Windows installer (`MDViewerByAli-0.3.0-Setup.exe`) from the [Releases](https://github.com/aliteleb/MDViewerByAli/releases) page.
 
 ## Build from Source
 
@@ -47,7 +56,7 @@ cargo test
 # Build release standalone binary (target\release\mdviewer-by-ali.exe)
 cargo build --release
 
-# Or run tests + release build + Inno Setup installer (dist\MDViewerByAli-0.2.0-Setup.exe)
+# Or run tests + release build + Inno Setup installer (dist\MDViewerByAli-0.3.0-Setup.exe)
 .\scripts\build-installer.ps1
 ```
 

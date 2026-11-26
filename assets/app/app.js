@@ -18,14 +18,30 @@
   const btnFilesRefresh = document.getElementById('btn-files-refresh');
   const btnFilesOpen = document.getElementById('btn-files-open');
   const btnOpenFolder = document.getElementById('btn-open-folder');
+  const docSplit = document.getElementById('doc-split');
+  const editorPane = document.getElementById('editor-pane');
+  const mdEditor = document.getElementById('md-editor');
+  const splitResizer = document.getElementById('split-resizer');
+  const editorStatus = document.getElementById('editor-status');
+  const btnEditorSave = document.getElementById('btn-editor-save');
   const readerScroll = document.getElementById('reader-scroll');
   const mdBody = document.getElementById('markdown-body');
+  const rawView = document.getElementById('raw-view');
+  const rawMeta = document.getElementById('raw-meta');
+  const rawCode = document.getElementById('raw-code');
+  const btnCopyRaw = document.getElementById('btn-copy-raw');
   const docMeta = document.getElementById('doc-meta');
   const docStatsText = document.getElementById('doc-stats-text');
   const liveBadge = document.getElementById('live-badge');
   const liveText = document.getElementById('live-text');
   const btnToc = document.getElementById('btn-toc');
   const btnFind = document.getElementById('btn-find');
+  const btnEdit = document.getElementById('btn-edit');
+  const btnRaw = document.getElementById('btn-raw');
+  const btnWide = document.getElementById('btn-wide');
+  const btnFont = document.getElementById('btn-font');
+  const btnFontLabel = document.getElementById('btn-font-label');
+  const fontPopover = document.getElementById('font-popover');
   const btnZoomReset = document.getElementById('btn-zoom-reset');
   const iconSun = document.getElementById('icon-sun');
   const iconMoon = document.getElementById('icon-moon');
@@ -56,6 +72,19 @@
     collapsedDirs: new Set(),
     dark: true,
     zoom: 100,
+    editMode: false,
+    rawMode: false,
+    wideMode: false,
+    fontFamily: 'system',
+    lineHeight: 'normal',
+    printPrefs: {
+      destination: '__pdf__',
+      theme_dark: false,
+      paper_size: 'a4',
+      landscape: false,
+      margin_mm: 14,
+      scale: 100,
+    },
     hits: [],
     hitIdx: -1,
     restoring: false,
@@ -105,6 +134,10 @@
       zoom: state.zoom,
       open_folder: state.folder ? state.folder.root_path : null,
       sidebar_tab: state.sidebarTab,
+      wide_mode: state.wideMode,
+      print: state.printPrefs,
+      font_family: state.fontFamily,
+      line_height: state.lineHeight,
     };
   }
 
@@ -126,12 +159,347 @@
   }
 
   // ── Theme & Zoom ───────────────────────────────────────────────
+  function updatePrintPageTheme(bg, marginMm = 14) {
+    let styleEl = document.getElementById('mdv-print-theme');
+    if (!styleEl) {
+      styleEl = document.createElement('style');
+      styleEl.id = 'mdv-print-theme';
+      document.head.appendChild(styleEl);
+    }
+    styleEl.textContent = `@page { size: auto; margin: ${marginMm}mm ${marginMm}mm; background-color: ${bg}; }`;
+  }
+
+  let toastTimer = null;
+  window.__MDV_TOAST__ = function (message, isError = false) {
+    const toast = document.getElementById('mdv-toast');
+    if (!toast) return;
+    toast.textContent = message;
+    toast.classList.toggle('error', Boolean(isError));
+    toast.classList.remove('hidden');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      toast.classList.add('hidden');
+    }, 2800);
+  };
+
+  // ── Branded Print & PDF Export Modal ───────────────────────────
+  const printModal = document.getElementById('print-modal');
+  const pmDocName = document.getElementById('pm-doc-name');
+  const pmClose = document.getElementById('pm-close');
+  const pmCancel = document.getElementById('pm-cancel');
+  const pmSubmit = document.getElementById('pm-submit');
+  const pmDestination = document.getElementById('pm-destination');
+  const pmPaper = document.getElementById('pm-paper');
+  const pmScale = document.getElementById('pm-scale');
+  const pmScaleVal = document.getElementById('pm-scale-val');
+  const pmPages = document.getElementById('pm-pages');
+  const pmCopies = document.getElementById('pm-copies');
+  const pmCopiesRow = document.getElementById('pm-copies-row');
+  const pmPreviewScroll = document.getElementById('pm-preview-scroll');
+  const pmPreviewInfo = document.getElementById('pm-preview-info');
+  const pmSheet = document.getElementById('pm-sheet');
+  const pmSheetContent = document.getElementById('pm-sheet-content');
+  const pmThemeDarkBtn = document.getElementById('pm-theme-dark');
+  const pmThemeLightBtn = document.getElementById('pm-theme-light');
+  const pmOrientPortraitBtn = document.getElementById('pm-orient-portrait');
+  const pmOrientLandscapeBtn = document.getElementById('pm-orient-landscape');
+  const pmMarginNormalBtn = document.getElementById('pm-margin-normal');
+  const pmMarginCompactBtn = document.getElementById('pm-margin-compact');
+  const pmMarginNoneBtn = document.getElementById('pm-margin-none');
+
+  const printState = {
+    open: false,
+    mermaidWasOverridden: false,
+  };
+
+  function persistPrintPrefsFromModal() {
+    state.printPrefs = {
+      destination: pmDestination.value || '__pdf__',
+      theme_dark: Boolean(state.printPrefs.theme_dark),
+      paper_size: pmPaper.value || 'a4',
+      landscape: Boolean(state.printPrefs.landscape),
+      margin_mm: state.printPrefs.margin_mm,
+      scale: parseInt(pmScale.value, 10) || 100,
+    };
+    saveSessionNow();
+  }
+
+  function collectPrintOptions() {
+    return {
+      destination: state.printPrefs.destination || '__pdf__',
+      paper_size: state.printPrefs.paper_size || 'a4',
+      landscape: Boolean(state.printPrefs.landscape),
+      scale: state.printPrefs.scale || 100,
+      copies: Math.max(1, Math.min(99, parseInt(pmCopies.value, 10) || 1)),
+      page_ranges: (pmPages.value || '').trim(),
+    };
+  }
+
+  function syncPrintModalControls() {
+    const p = state.printPrefs;
+    pmThemeDarkBtn.classList.toggle('active', p.theme_dark);
+    pmThemeLightBtn.classList.toggle('active', !p.theme_dark);
+    pmOrientPortraitBtn.classList.toggle('active', !p.landscape);
+    pmOrientLandscapeBtn.classList.toggle('active', p.landscape);
+    pmMarginNormalBtn.classList.toggle('active', p.margin_mm === 14);
+    pmMarginCompactBtn.classList.toggle('active', p.margin_mm === 7);
+    pmMarginNoneBtn.classList.toggle('active', p.margin_mm === 0);
+    pmPaper.value = p.paper_size || 'a4';
+    pmScale.value = String(p.scale || 100);
+    pmScaleVal.textContent = `${pmScale.value}%`;
+
+    const isPdf = pmDestination.value === '__pdf__' || !pmDestination.value;
+    pmCopiesRow.classList.toggle('hidden', isPdf);
+    pmSubmit.textContent = isPdf ? 'Export PDF' : 'Print';
+  }
+
+  function applyPrintStylesForOutput() {
+    const p = state.printPrefs;
+    const bg = p.theme_dark ? '#0D1017' : '#FFFFFF';
+    document.documentElement.setAttribute('data-print-theme', p.theme_dark ? 'dark' : 'light');
+    updatePrintPageTheme(bg, p.margin_mm);
+    if (p.theme_dark !== state.dark) {
+      printState.mermaidWasOverridden = true;
+      reRenderMermaidForTheme(p.theme_dark);
+    } else if (printState.mermaidWasOverridden) {
+      printState.mermaidWasOverridden = false;
+      reRenderMermaidForTheme(state.dark);
+    }
+  }
+
+  function paperSizePx(paper, landscape) {
+    const map = {
+      a4: [794, 1123],
+      letter: [816, 1056],
+      legal: [816, 1344],
+      a3: [1123, 1587],
+    };
+    const dims = map[(paper || 'a4').toLowerCase()] || map.a4;
+    return landscape ? [dims[1], dims[0]] : dims;
+  }
+
+  function renderNativePrintPreview() {
+    if (!printState.open) return;
+    const p = state.printPrefs;
+    const [paperW, paperH] = paperSizePx(p.paper_size, p.landscape);
+    const availW = Math.max(320, (pmPreviewScroll.clientWidth || 720) - 48);
+    const fitRatio = Math.min(1, availW / paperW);
+    const displayW = Math.round(paperW * fitRatio);
+    const minDisplayH = Math.round(paperH * fitRatio);
+    const padPx = Math.round(((p.margin_mm || 0) * 3.7795) * fitRatio);
+
+    pmSheet.setAttribute('data-preview-theme', p.theme_dark ? 'dark' : 'light');
+    pmSheet.style.width = `${displayW}px`;
+    pmSheet.style.minHeight = `${minDisplayH}px`;
+    pmSheet.style.padding = `${padPx}px`;
+
+    const baseDocPx = (15.5 * state.zoom) / 100;
+    const previewFontPx = baseDocPx * fitRatio * ((p.scale || 100) / 100);
+    pmSheetContent.style.setProperty('--doc-font-size', `${previewFontPx.toFixed(2)}px`);
+
+    pmSheetContent.innerHTML = '';
+    if (state.rawMode) {
+      const clone = rawView.cloneNode(true);
+      clone.removeAttribute('id');
+      clone.classList.remove('hidden', 'wide');
+      clone.querySelectorAll('.copy-btn').forEach((el) => el.remove());
+      pmSheetContent.appendChild(clone);
+    } else {
+      const frag = document.createDocumentFragment();
+      for (const child of Array.from(mdBody.childNodes)) {
+        frag.appendChild(child.cloneNode(true));
+      }
+      pmSheetContent.appendChild(frag);
+      pmSheetContent.querySelectorAll('.copy-btn, .mdv-heading-anchor').forEach((el) => el.remove());
+    }
+
+    const estPages = Math.max(1, Math.ceil((pmSheet.scrollHeight || minDisplayH) / Math.max(1, minDisplayH)));
+    const paperLabel = (p.paper_size || 'a4').toUpperCase();
+    const orientLabel = p.landscape ? 'Landscape' : 'Portrait';
+    pmPreviewInfo.textContent = `${paperLabel} · ${orientLabel} · ${p.scale}% · ~${estPages} page${estPages > 1 ? 's' : ''}`;
+  }
+
+  function closePrintModal() {
+    if (!printState.open) return;
+    printState.open = false;
+    printModal.classList.add('hidden');
+    pmSheetContent.innerHTML = '';
+    pmSubmit.disabled = false;
+    document.documentElement.removeAttribute('data-print-theme');
+    updatePrintPageTheme(state.dark ? '#0D1017' : '#FFFFFF', 14);
+    if (printState.mermaidWasOverridden) {
+      printState.mermaidWasOverridden = false;
+      reRenderMermaidForTheme(state.dark);
+    }
+  }
+
+  function openPrintModal(forcePdf = false) {
+    const tab = activeTab();
+    if (!tab || tab.kind !== 'doc' || !tab.doc) return;
+    printState.open = true;
+    printState.mermaidWasOverridden = false;
+
+    if (forcePdf) {
+      state.printPrefs.destination = '__pdf__';
+      saveSessionNow();
+    }
+
+    pmPages.value = '';
+    pmCopies.value = '1';
+    pmSubmit.disabled = false;
+    pmDocName.textContent = tab.doc.filename || '';
+
+    if (pmDestination.options.length === 0) {
+      const opt = document.createElement('option');
+      opt.value = '__pdf__';
+      opt.textContent = 'Save as PDF';
+      pmDestination.appendChild(opt);
+    }
+    if (
+      Array.from(pmDestination.options).some((o) => o.value === state.printPrefs.destination)
+    ) {
+      pmDestination.value = state.printPrefs.destination;
+    } else {
+      pmDestination.value = '__pdf__';
+    }
+
+    syncPrintModalControls();
+    printModal.classList.remove('hidden');
+    postIpc({ type: 'get_printers' });
+    requestAnimationFrame(() => renderNativePrintPreview());
+  }
+
+  window.__MDV_SET_PRINTERS__ = function (info) {
+    pmDestination.innerHTML = '';
+    const pdfOpt = document.createElement('option');
+    pdfOpt.value = '__pdf__';
+    pdfOpt.textContent = 'Save as PDF';
+    pmDestination.appendChild(pdfOpt);
+
+    const printers = Array.isArray(info && info.printers) ? info.printers : [];
+    const def = info && info.default_printer;
+    for (const p of printers) {
+      const opt = document.createElement('option');
+      opt.value = p;
+      opt.textContent = p === def ? `${p} (Default)` : p;
+      pmDestination.appendChild(opt);
+    }
+
+    const savedDest = state.printPrefs.destination || '__pdf__';
+    if (savedDest === '__pdf__' || printers.includes(savedDest)) {
+      pmDestination.value = savedDest;
+    } else {
+      pmDestination.value = '__pdf__';
+      state.printPrefs.destination = '__pdf__';
+    }
+    syncPrintModalControls();
+  };
+
+  window.__MDV_PRINT_DONE__ = function (success, message) {
+    pmSubmit.disabled = false;
+    syncPrintModalControls();
+    if (success) {
+      closePrintModal();
+    }
+    if (message) {
+      window.__MDV_TOAST__(message, !success);
+    }
+  };
+
+  pmClose.addEventListener('click', closePrintModal);
+  pmCancel.addEventListener('click', closePrintModal);
+  printModal.addEventListener('click', (e) => {
+    if (e.target === printModal) closePrintModal();
+  });
+  pmDestination.addEventListener('change', () => {
+    persistPrintPrefsFromModal();
+    syncPrintModalControls();
+  });
+  pmThemeDarkBtn.addEventListener('click', () => {
+    state.printPrefs.theme_dark = true;
+    saveSessionNow();
+    syncPrintModalControls();
+    renderNativePrintPreview();
+  });
+  pmThemeLightBtn.addEventListener('click', () => {
+    state.printPrefs.theme_dark = false;
+    saveSessionNow();
+    syncPrintModalControls();
+    renderNativePrintPreview();
+  });
+  pmOrientPortraitBtn.addEventListener('click', () => {
+    state.printPrefs.landscape = false;
+    saveSessionNow();
+    syncPrintModalControls();
+    renderNativePrintPreview();
+  });
+  pmOrientLandscapeBtn.addEventListener('click', () => {
+    state.printPrefs.landscape = true;
+    saveSessionNow();
+    syncPrintModalControls();
+    renderNativePrintPreview();
+  });
+  pmMarginNormalBtn.addEventListener('click', () => {
+    state.printPrefs.margin_mm = 14;
+    saveSessionNow();
+    syncPrintModalControls();
+    renderNativePrintPreview();
+  });
+  pmMarginCompactBtn.addEventListener('click', () => {
+    state.printPrefs.margin_mm = 7;
+    saveSessionNow();
+    syncPrintModalControls();
+    renderNativePrintPreview();
+  });
+  pmMarginNoneBtn.addEventListener('click', () => {
+    state.printPrefs.margin_mm = 0;
+    saveSessionNow();
+    syncPrintModalControls();
+    renderNativePrintPreview();
+  });
+  pmPaper.addEventListener('change', () => {
+    persistPrintPrefsFromModal();
+    renderNativePrintPreview();
+  });
+  pmScale.addEventListener('input', () => {
+    state.printPrefs.scale = parseInt(pmScale.value, 10) || 100;
+    pmScaleVal.textContent = `${state.printPrefs.scale}%`;
+    renderNativePrintPreview();
+  });
+  pmScale.addEventListener('change', persistPrintPrefsFromModal);
+
+  pmSubmit.addEventListener('click', () => {
+    const tab = activeTab();
+    if (!tab || tab.kind !== 'doc' || !tab.doc) return;
+    persistPrintPrefsFromModal();
+    const options = collectPrintOptions();
+    applyPrintStylesForOutput();
+    if (options.destination === '__pdf__') {
+      const baseName = (tab.doc.filename || 'document').replace(/\.[^.]+$/, '') + '.pdf';
+      postIpc({
+        type: 'export_pdf',
+        suggested_name: baseName,
+        current_path: tab.doc.path === 'Welcome-Demo.md' ? null : tab.doc.path,
+        options,
+      });
+    } else {
+      pmSubmit.disabled = true;
+      pmSubmit.textContent = 'Printing...';
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          postIpc({ type: 'print_document', options });
+        });
+      });
+    }
+  });
+
   function applyTheme(dark, notifyHost = true) {
     state.dark = dark;
     const bg = dark ? '#0D1017' : '#FFFFFF';
     document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
     document.documentElement.style.background = bg;
     document.body.style.background = bg;
+    updatePrintPageTheme(bg);
     iconSun.classList.toggle('hidden', !dark);
     iconMoon.classList.toggle('hidden', dark);
     if (notifyHost) {
@@ -146,6 +514,81 @@
     const pxSize = (15.5 * state.zoom) / 100;
     mdBody.style.setProperty('--doc-font-size', `${pxSize.toFixed(2)}px`);
     btnZoomReset.textContent = `${state.zoom}%`;
+    if (persist) saveSessionNow();
+  }
+
+  const FONT_STACKS = {
+    system: {
+      css: '"Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif',
+      label: 'Font',
+      bundled: false,
+    },
+    'ibm-plex': {
+      css: '"IBM Plex Sans Arabic", "Segoe UI", system-ui, sans-serif',
+      label: 'IBM Plex',
+      bundled: true,
+    },
+    cairo: {
+      css: '"Cairo", "Segoe UI", system-ui, sans-serif',
+      label: 'Cairo',
+      bundled: true,
+    },
+    tajawal: {
+      css: '"Tajawal", "Segoe UI", system-ui, sans-serif',
+      label: 'Tajawal',
+      bundled: true,
+    },
+    amiri: {
+      css: '"Amiri", Georgia, "Times New Roman", serif',
+      label: 'Amiri',
+      bundled: true,
+    },
+    inter: {
+      css: '"Inter", "Segoe UI", system-ui, sans-serif',
+      label: 'Inter',
+      bundled: true,
+    },
+    merriweather: {
+      css: '"Merriweather", Georgia, "Times New Roman", serif',
+      label: 'Serif',
+      bundled: true,
+    },
+    mono: {
+      css: '"Cascadia Code", "JetBrains Mono", Consolas, monospace',
+      label: 'Mono',
+      bundled: false,
+    },
+  };
+
+  const LINE_HEIGHTS = {
+    compact: '1.52',
+    normal: '1.72',
+    relaxed: '1.94',
+  };
+
+  function applyTypography(fontKey, lineHeightKey, persist = true) {
+    const fKey = FONT_STACKS[fontKey] ? fontKey : 'system';
+    const lKey = LINE_HEIGHTS[lineHeightKey] ? lineHeightKey : 'normal';
+    state.fontFamily = fKey;
+    state.lineHeight = lKey;
+
+    const spec = FONT_STACKS[fKey];
+    if (spec.bundled) {
+      loadCssOnce('/vendor/fonts/fonts.css').catch(() => {});
+    }
+    document.documentElement.style.setProperty('--doc-font-family', spec.css);
+    document.documentElement.style.setProperty('--doc-line-height', LINE_HEIGHTS[lKey]);
+    if (btnFontLabel) btnFontLabel.textContent = spec.label;
+
+    if (fontPopover) {
+      fontPopover.querySelectorAll('.font-opt').forEach((el) => {
+        el.classList.toggle('active', el.dataset.font === fKey);
+      });
+      fontPopover.querySelectorAll('.lh-opt').forEach((el) => {
+        el.classList.toggle('active', el.dataset.lh === lKey);
+      });
+    }
+    if (printState.open) renderNativePrintPreview();
     if (persist) saveSessionNow();
   }
 
@@ -181,6 +624,20 @@
       const isActive = tab.id === state.activeTabId;
       btn.className = 'tab-item' + (isActive ? ' active' : '');
       btn.title = tab.kind === 'doc' && tab.doc ? tab.doc.path : 'New Tab';
+
+      const icon = document.createElement('span');
+      icon.className = 'tab-icon';
+      icon.innerHTML = tab.kind === 'doc' && tab.doc && tab.doc.is_mermaid
+        ? '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><rect x="2" y="2.5" width="4.5" height="4" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="9.5" y="9.5" width="4.5" height="4" rx="1" stroke="currentColor" stroke-width="1.3"/><path d="M6.5 4.5h2a1.5 1.5 0 0 1 1.5 1.5v3.5" stroke="currentColor" stroke-width="1.3"/></svg>'
+        : '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M4 2.2h5.2l3 3V13.8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3.2a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>';
+      btn.appendChild(icon);
+
+      if (tab.dirty) {
+        const dot = document.createElement('span');
+        dot.className = 'tab-dirty-dot';
+        dot.title = 'Unsaved changes';
+        btn.appendChild(dot);
+      }
 
       const title = document.createElement('span');
       title.className = 'tab-title';
@@ -241,6 +698,84 @@
     if (persist) saveSessionNow();
   }
 
+  function applyWideMode(wide, persist = true) {
+    state.wideMode = Boolean(wide);
+    mdBody.classList.toggle('wide', state.wideMode);
+    rawView.classList.toggle('wide', state.wideMode);
+    btnWide.classList.toggle('active', state.wideMode);
+    if (persist) saveSessionNow();
+  }
+
+  function syncRawView(doc) {
+    if (!doc) return;
+    const raw = doc.raw_markdown || '';
+    const lineCount = raw ? raw.split('\n').length : 0;
+    rawMeta.textContent = `${doc.filename} · ${lineCount} lines`;
+    rawCode.textContent = raw;
+  }
+
+  function updateEditorSaveState() {
+    const tab = activeTab();
+    const isDirty = Boolean(tab && tab.dirty);
+    if (editorStatus) {
+      editorStatus.textContent = isDirty ? 'Unsaved' : 'Saved';
+      editorStatus.classList.toggle('dirty', isDirty);
+    }
+    if (btnEditorSave) {
+      btnEditorSave.disabled = !isDirty;
+    }
+  }
+
+  function syncEditorFromTab() {
+    const tab = activeTab();
+    if (!tab || tab.kind !== 'doc' || !tab.doc) {
+      mdEditor.value = '';
+      updateEditorSaveState();
+      return;
+    }
+    const text = typeof tab.draft === 'string' ? tab.draft : (tab.doc.raw_markdown || '');
+    if (mdEditor.value !== text) {
+      mdEditor.value = text;
+    }
+    updateEditorSaveState();
+  }
+
+  function applyEditMode(enabled) {
+    const tab = activeTab();
+    const hasDoc = Boolean(tab && tab.kind === 'doc' && tab.doc);
+    state.editMode = Boolean(enabled) && hasDoc;
+    btnEdit.classList.toggle('active', state.editMode);
+    editorPane.classList.toggle('hidden', !state.editMode);
+    splitResizer.classList.toggle('hidden', !state.editMode);
+
+    if (state.editMode) {
+      if (state.rawMode) applyRawMode(false);
+      syncEditorFromTab();
+      requestAnimationFrame(() => mdEditor.focus());
+    }
+  }
+
+  function applyRawMode(raw) {
+    const tab = activeTab();
+    const hasDoc = Boolean(tab && tab.kind === 'doc' && tab.doc);
+    state.rawMode = Boolean(raw) && hasDoc;
+    btnRaw.classList.toggle('active', state.rawMode);
+    if (!hasDoc) {
+      mdBody.classList.remove('hidden');
+      rawView.classList.add('hidden');
+      return;
+    }
+    if (state.rawMode) {
+      if (state.editMode) applyEditMode(false);
+      syncRawView(tab.doc);
+      mdBody.classList.add('hidden');
+      rawView.classList.remove('hidden');
+    } else {
+      rawView.classList.add('hidden');
+      mdBody.classList.remove('hidden');
+    }
+  }
+
   function activateTab(tabId, persist = true) {
     const prev = activeTab();
     if (prev && prev.kind === 'doc') {
@@ -251,8 +786,10 @@
     const next = activeTab();
     if (!next || next.kind === 'new_tab' || !next.doc) {
       welcomeView.classList.remove('hidden');
-      readerScroll.classList.add('hidden');
+      docSplit.classList.add('hidden');
       document.title = 'MDViewerByAli';
+      applyEditMode(false);
+      applyRawMode(false);
       updateSidebarVisibility();
       renderFileTree();
       renderTabs();
@@ -261,9 +798,12 @@
     }
 
     welcomeView.classList.add('hidden');
-    readerScroll.classList.remove('hidden');
+    docSplit.classList.remove('hidden');
     renderTabs();
     renderDocumentIntoWorkspace(next.doc, next.scrollTop);
+    if (state.editMode) syncEditorFromTab();
+    applyRawMode(state.rawMode);
+    applyEditMode(state.editMode);
     renderFileTree();
     if (persist) saveSessionNow();
   }
@@ -306,7 +846,10 @@
   window.__MDV_OPEN_DOC__ = function (doc) {
     const existing = findTabByPath(doc.path);
     if (existing) {
-      existing.doc = doc;
+      if (!existing.dirty) {
+        existing.doc = doc;
+        existing.draft = null;
+      }
       activateTab(existing.id);
       return;
     }
@@ -316,11 +859,13 @@
       current.kind = 'doc';
       current.doc = doc;
       current.scrollTop = 0;
+      current.dirty = false;
+      current.draft = null;
       activateTab(current.id);
       return;
     }
 
-    const tab = { id: nextId(), kind: 'doc', doc, scrollTop: 0 };
+    const tab = { id: nextId(), kind: 'doc', doc, scrollTop: 0, dirty: false, draft: null };
     state.tabs.push(tab);
     activateTab(tab.id);
   };
@@ -328,11 +873,50 @@
   window.__MDV_UPDATE_DOC__ = function (doc) {
     const existing = findTabByPath(doc.path);
     if (!existing) return;
+    if (existing.dirty) {
+      if (existing.id === state.activeTabId) {
+        window.__MDV_TOAST__('File modified externally (keeping unsaved edits)');
+      }
+      return;
+    }
     existing.doc = doc;
+    existing.draft = null;
     if (existing.id === state.activeTabId) {
       const keepScroll = readerScroll.scrollTop;
       renderDocumentIntoWorkspace(doc, keepScroll);
+      if (state.editMode) syncEditorFromTab();
     }
+  };
+
+  window.__MDV_LIVE_PREVIEW__ = function (doc) {
+    const cur = activeTab();
+    if (!cur || cur.kind !== 'doc' || !cur.doc) return;
+    if (cur.doc.path !== doc.path) return;
+    const keepScroll = readerScroll.scrollTop;
+    renderDocumentIntoWorkspace(doc, keepScroll);
+  };
+
+  window.__MDV_FILE_SAVED__ = function (oldPath, newDoc, ok, errMsg) {
+    if (!ok || !newDoc) {
+      window.__MDV_TOAST__(errMsg || 'Failed to save file', true);
+      return;
+    }
+    const tab = findTabByPath(oldPath) || activeTab();
+    if (tab) {
+      tab.kind = 'doc';
+      tab.doc = newDoc;
+      tab.dirty = false;
+      tab.draft = null;
+      if (tab.id === state.activeTabId) {
+        const keepScroll = readerScroll.scrollTop;
+        renderDocumentIntoWorkspace(newDoc, keepScroll);
+        syncEditorFromTab();
+      }
+      renderTabs();
+      renderFileTree();
+      saveSessionNow();
+    }
+    window.__MDV_TOAST__(`Saved ${newDoc.filename}`);
   };
 
   window.__MDV_RESTORE_SESSION__ = function (payload) {
@@ -343,6 +927,18 @@
       state.sidebarTab = payload.sidebar_tab === 'files' ? 'files' : 'outline';
       state.folder = payload.folder || null;
       applyZoom(payload.zoom || 100, false);
+      applyWideMode(Boolean(payload.wide_mode), false);
+      applyTypography(payload.font_family || 'system', payload.line_height || 'normal', false);
+      if (payload.print) {
+        state.printPrefs = {
+          destination: payload.print.destination || '__pdf__',
+          theme_dark: Boolean(payload.print.theme_dark),
+          paper_size: payload.print.paper_size || 'a4',
+          landscape: Boolean(payload.print.landscape),
+          margin_mm: typeof payload.print.margin_mm === 'number' ? payload.print.margin_mm : 14,
+          scale: payload.print.scale || 100,
+        };
+      }
 
       state.tabs = [];
       const incoming = Array.isArray(payload.tabs) ? payload.tabs : [];
@@ -353,9 +949,11 @@
             kind: 'doc',
             doc: item.doc,
             scrollTop: item.scroll_top || 0,
+            dirty: false,
+            draft: null,
           });
         } else {
-          state.tabs.push({ id: nextId(), kind: 'new_tab', doc: null, scrollTop: 0 });
+          state.tabs.push({ id: nextId(), kind: 'new_tab', doc: null, scrollTop: 0, dirty: false, draft: null });
         }
       }
 
@@ -393,6 +991,7 @@
   function renderDocumentIntoWorkspace(doc, restoreScrollTop) {
     document.title = `${doc.filename} — MDViewerByAli`;
     mdBody.innerHTML = doc.html;
+    if (state.rawMode) syncRawView(doc);
 
     updateSidebarVisibility();
 
@@ -505,7 +1104,7 @@
       });
     });
 
-    const blocks = Array.from(mdBody.querySelectorAll('pre code'));
+    const blocks = Array.from(mdBody.querySelectorAll('pre code:not(.mdv-diff)'));
     if (blocks.length === 0) return;
 
     const runHighlight = () => {
@@ -657,7 +1256,8 @@
     }
   }
 
-  function reRenderMermaidForTheme() {
+  function reRenderMermaidForTheme(overrideDark) {
+    const useDark = typeof overrideDark === 'boolean' ? overrideDark : state.dark;
     const els = Array.from(mdBody.querySelectorAll('.mermaid'));
     if (els.length === 0) return;
     els.forEach((el) => {
@@ -675,7 +1275,7 @@
       mermaid.initialize({
         startOnLoad: false,
         securityLevel: 'loose',
-        theme: state.dark ? 'dark' : 'default',
+        theme: useDark ? 'dark' : 'default',
       });
       mermaid.run({ nodes: connected });
     };
@@ -913,11 +1513,16 @@
           chevron.className = 'tree-chevron';
           chevron.textContent = '▾';
 
+          const dirIcon = document.createElement('span');
+          dirIcon.className = 'tree-icon';
+          dirIcon.innerHTML = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M2 4.2A1.2 1.2 0 0 1 3.2 3h3l1.2 1.4h5.4A1.2 1.2 0 0 1 14 5.6v6.2a1.2 1.2 0 0 1-1.2 1.2H3.2A1.2 1.2 0 0 1 2 11.8V4.2Z" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round"/></svg>';
+
           const label = document.createElement('span');
           label.className = 'tree-label';
           label.textContent = node.name;
 
           row.appendChild(chevron);
+          row.appendChild(dirIcon);
           row.appendChild(label);
           row.addEventListener('click', () => {
             if (state.collapsedDirs.has(node.path)) {
@@ -944,12 +1549,17 @@
           row.style.paddingLeft = `${depth * 14 + 22}px`;
           row.title = node.path;
 
+          const fileIcon = document.createElement('span');
+          fileIcon.className = 'tree-icon';
+          fileIcon.innerHTML = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M4 2.2h5.2l3 3V13.8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3.2a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>';
+
           const label = document.createElement('span');
           label.className = 'tree-label';
           label.textContent = node.name;
 
           const dotIdx = node.name.lastIndexOf('.');
           const ext = dotIdx > 0 ? node.name.slice(dotIdx + 1) : '';
+          row.appendChild(fileIcon);
           row.appendChild(label);
           if (ext) {
             const badge = document.createElement('span');
@@ -1122,6 +1732,12 @@
         const top = Math.max(0, target.offsetTop - 20);
         readerScroll.scrollTo({ top, behavior: 'smooth' });
       }
+      if (link.classList.contains('mdv-heading-anchor') && navigator.clipboard) {
+        navigator.clipboard.writeText(href).then(() => {
+          link.textContent = '✓';
+          setTimeout(() => { link.textContent = '#'; }, 1200);
+        }).catch(() => {});
+      }
     } else {
       const cur = activeTab();
       if (cur && cur.kind === 'doc' && cur.doc && cur.doc.path) {
@@ -1192,12 +1808,228 @@
   });
 
   document.getElementById('btn-theme').addEventListener('click', () => applyTheme(!state.dark));
+  btnEdit.addEventListener('click', () => applyEditMode(!state.editMode));
+  btnRaw.addEventListener('click', () => applyRawMode(!state.rawMode));
+  btnWide.addEventListener('click', () => applyWideMode(!state.wideMode));
+
+  // ── Typography Popover Bindings ────────────────────────────────
+  function closeFontPopover() {
+    if (!fontPopover) return;
+    fontPopover.classList.add('hidden');
+    btnFont.classList.remove('active');
+    btnFont.setAttribute('aria-expanded', 'false');
+  }
+
+  btnFont.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const opening = fontPopover.classList.contains('hidden');
+    fontPopover.classList.toggle('hidden', !opening);
+    btnFont.classList.toggle('active', opening);
+    btnFont.setAttribute('aria-expanded', String(opening));
+  });
+
+  fontPopover.querySelectorAll('.font-opt').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      applyTypography(btn.dataset.font, state.lineHeight);
+    });
+  });
+
+  fontPopover.querySelectorAll('.lh-opt').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      applyTypography(state.fontFamily, btn.dataset.lh);
+    });
+  });
+
+  document.addEventListener('click', (e) => {
+    if (
+      fontPopover &&
+      !fontPopover.classList.contains('hidden') &&
+      !fontPopover.contains(e.target) &&
+      !btnFont.contains(e.target)
+    ) {
+      closeFontPopover();
+    }
+  });
+
+  // ── Split Editor Live Preview, Toolbar, Resizer & Save ─────────
+  let livePreviewTimer = null;
+  let tabsRenderTimer = null;
+
+  function saveActiveTab() {
+    const tab = activeTab();
+    if (!tab || tab.kind !== 'doc' || !tab.doc) return;
+    const content = state.editMode
+      ? mdEditor.value
+      : typeof tab.draft === 'string'
+        ? tab.draft
+        : tab.doc.raw_markdown || '';
+    postIpc({ type: 'save_file', path: tab.doc.path, content });
+  }
+
+  btnEditorSave.addEventListener('click', saveActiveTab);
+
+  mdEditor.addEventListener('input', () => {
+    const tab = activeTab();
+    if (!tab || tab.kind !== 'doc' || !tab.doc) return;
+    const val = mdEditor.value;
+    const wasDirty = Boolean(tab.dirty);
+    tab.draft = val;
+    tab.dirty = val !== (tab.doc.raw_markdown || '');
+    updateEditorSaveState();
+    if (wasDirty !== tab.dirty) {
+      clearTimeout(tabsRenderTimer);
+      tabsRenderTimer = setTimeout(renderTabs, 50);
+    }
+    clearTimeout(livePreviewTimer);
+    livePreviewTimer = setTimeout(() => {
+      postIpc({ type: 'render_live_preview', path: tab.doc.path, content: val });
+    }, 120);
+  });
+
+  mdEditor.addEventListener('keydown', (e) => {
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const s = mdEditor.selectionStart;
+      const end = mdEditor.selectionEnd;
+      mdEditor.setRangeText('  ', s, end, 'end');
+      mdEditor.dispatchEvent(new Event('input'));
+    }
+  });
+
+  let syncingScroll = false;
+  mdEditor.addEventListener(
+    'scroll',
+    () => {
+      if (!state.editMode || syncingScroll) return;
+      const maxEd = mdEditor.scrollHeight - mdEditor.clientHeight;
+      const maxPrev = readerScroll.scrollHeight - readerScroll.clientHeight;
+      if (maxEd <= 0 || maxPrev <= 0) return;
+      syncingScroll = true;
+      readerScroll.scrollTop = (mdEditor.scrollTop / maxEd) * maxPrev;
+      requestAnimationFrame(() => {
+        syncingScroll = false;
+      });
+    },
+    { passive: true }
+  );
+
+  function insertEditorFormat(fmt) {
+    const start = mdEditor.selectionStart;
+    const end = mdEditor.selectionEnd;
+    const sel = mdEditor.value.slice(start, end);
+    let rep = '';
+    let selOffStart = 0;
+    let selOffEnd = 0;
+    switch (fmt) {
+      case 'bold':
+        rep = `**${sel || 'bold text'}**`;
+        selOffStart = 2;
+        selOffEnd = rep.length - 2;
+        break;
+      case 'italic':
+        rep = `*${sel || 'italic text'}*`;
+        selOffStart = 1;
+        selOffEnd = rep.length - 1;
+        break;
+      case 'heading':
+        rep = `\n## ${sel || 'Section Heading'}\n`;
+        selOffStart = 4;
+        selOffEnd = rep.length - 1;
+        break;
+      case 'code':
+        if (sel.includes('\n')) {
+          rep = `\n\`\`\`\n${sel}\n\`\`\`\n`;
+          selOffStart = 5;
+          selOffEnd = 5 + sel.length;
+        } else {
+          rep = `\`${sel || 'code'}\``;
+          selOffStart = 1;
+          selOffEnd = rep.length - 1;
+        }
+        break;
+      case 'link':
+        rep = `[${sel || 'link text'}](https://example.com)`;
+        selOffStart = rep.indexOf('https://');
+        selOffEnd = rep.length - 1;
+        break;
+      case 'table':
+        rep = `\n| Column 1 | Column 2 |\n| :--- | :--- |\n| Value 1 | Value 2 |\n`;
+        selOffStart = 3;
+        selOffEnd = 11;
+        break;
+      case 'math':
+        rep = `\n$$\n${sel || 'E = mc^2'}\n$$\n`;
+        selOffStart = 4;
+        selOffEnd = rep.length - 4;
+        break;
+      case 'mermaid':
+        rep = `\n\`\`\`mermaid\nflowchart LR\n  A[Start] --> B[End]\n\`\`\`\n`;
+        selOffStart = 12;
+        selOffEnd = rep.length - 5;
+        break;
+      default:
+        return;
+    }
+    mdEditor.focus();
+    mdEditor.setRangeText(rep, start, end, 'end');
+    if (!sel && selOffEnd > selOffStart) {
+      mdEditor.setSelectionRange(start + selOffStart, start + selOffEnd);
+    }
+    mdEditor.dispatchEvent(new Event('input'));
+  }
+
+  document.querySelectorAll('.ed-btn[data-fmt]').forEach((btn) => {
+    btn.addEventListener('click', () => insertEditorFormat(btn.dataset.fmt));
+  });
+
+  let resizingSplit = false;
+  splitResizer.addEventListener('mousedown', (e) => {
+    if (!state.editMode) return;
+    e.preventDefault();
+    resizingSplit = true;
+    splitResizer.classList.add('dragging');
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!resizingSplit) return;
+    const rect = docSplit.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const pct = Math.max(25, Math.min(75, ((e.clientX - rect.left) / rect.width) * 100));
+    editorPane.style.flex = `0 0 ${pct.toFixed(1)}%`;
+  });
+  document.addEventListener('mouseup', () => {
+    if (resizingSplit) {
+      resizingSplit = false;
+      splitResizer.classList.remove('dragging');
+    }
+  });
+  btnCopyRaw.addEventListener('click', async () => {
+    const tab = activeTab();
+    if (!tab || tab.kind !== 'doc' || !tab.doc) return;
+    try {
+      await navigator.clipboard.writeText(tab.doc.raw_markdown || '');
+      btnCopyRaw.textContent = 'Copied!';
+      setTimeout(() => { btnCopyRaw.textContent = 'Copy Raw'; }, 1400);
+    } catch (_) {}
+  });
   document.getElementById('btn-zoom-in').addEventListener('click', () => applyZoom(state.zoom + 10));
   document.getElementById('btn-zoom-out').addEventListener('click', () => applyZoom(state.zoom - 10));
   btnZoomReset.addEventListener('click', () => applyZoom(100));
-  document.getElementById('btn-print').addEventListener('click', () => window.print());
+  document.getElementById('btn-print').addEventListener('click', () => openPrintModal(false));
+  document.getElementById('btn-export-pdf').addEventListener('click', () => openPrintModal(true));
 
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (fontPopover && !fontPopover.classList.contains('hidden')) {
+        e.preventDefault();
+        closeFontPopover();
+        return;
+      }
+      if (printState.open) {
+        e.preventDefault();
+        closePrintModal();
+        return;
+      }
+    }
     if (!e.ctrlKey && !e.metaKey) return;
     const k = e.key.toLowerCase();
     if (k === 't') {
@@ -1218,12 +2050,26 @@
     } else if (k === 'b') {
       e.preventDefault();
       btnToc.click();
+    } else if (k === 'e') {
+      e.preventDefault();
+      applyEditMode(!state.editMode);
+    } else if (k === 's') {
+      if (state.editMode || (activeTab() && activeTab().dirty)) {
+        e.preventDefault();
+        saveActiveTab();
+      }
+    } else if (k === 'u') {
+      e.preventDefault();
+      applyRawMode(!state.rawMode);
     } else if (k === 'f') {
       e.preventDefault();
       openFindBar();
+    } else if (k === 'p' && e.shiftKey) {
+      e.preventDefault();
+      openPrintModal(true);
     } else if (k === 'p') {
       e.preventDefault();
-      window.print();
+      openPrintModal(false);
     } else if (k === '=' || k === '+') {
       e.preventDefault();
       applyZoom(state.zoom + 10);

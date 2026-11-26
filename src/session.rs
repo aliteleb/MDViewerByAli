@@ -52,6 +52,47 @@ pub enum SavedTab {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavedPrintSettings {
+    #[serde(default = "default_print_dest")]
+    pub destination: String,
+    #[serde(default)]
+    pub theme_dark: bool,
+    #[serde(default = "default_paper_size")]
+    pub paper_size: String,
+    #[serde(default)]
+    pub landscape: bool,
+    #[serde(default = "default_margin_mm")]
+    pub margin_mm: u32,
+    #[serde(default = "default_zoom")]
+    pub scale: u32,
+}
+
+fn default_print_dest() -> String {
+    "__pdf__".to_string()
+}
+
+fn default_paper_size() -> String {
+    "a4".to_string()
+}
+
+fn default_margin_mm() -> u32 {
+    14
+}
+
+impl Default for SavedPrintSettings {
+    fn default() -> Self {
+        Self {
+            destination: default_print_dest(),
+            theme_dark: false,
+            paper_size: default_paper_size(),
+            landscape: false,
+            margin_mm: default_margin_mm(),
+            scale: 100,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionState {
     #[serde(default = "default_tabs")]
     pub tabs: Vec<SavedTab>,
@@ -69,6 +110,22 @@ pub struct SessionState {
     pub open_folder: Option<String>,
     #[serde(default = "default_sidebar_tab")]
     pub sidebar_tab: String,
+    #[serde(default)]
+    pub wide_mode: bool,
+    #[serde(default)]
+    pub print: SavedPrintSettings,
+    #[serde(default = "default_font_family")]
+    pub font_family: String,
+    #[serde(default = "default_line_height")]
+    pub line_height: String,
+}
+
+fn default_font_family() -> String {
+    "system".to_string()
+}
+
+fn default_line_height() -> String {
+    "normal".to_string()
 }
 
 fn default_sidebar_tab() -> String {
@@ -98,6 +155,10 @@ impl Default for SessionState {
             window: WindowState::default(),
             open_folder: None,
             sidebar_tab: default_sidebar_tab(),
+            wide_mode: false,
+            print: SavedPrintSettings::default(),
+            font_family: default_font_family(),
+            line_height: default_line_height(),
         }
     }
 }
@@ -124,6 +185,7 @@ pub fn load() -> SessionState {
         parsed.active_index = parsed.tabs.len() - 1;
     }
     parsed.zoom = parsed.zoom.clamp(70, 200);
+    parsed.print.scale = parsed.print.scale.clamp(50, 150);
     parsed.window.width = parsed.window.width.clamp(680.0, 7680.0);
     parsed.window.height = parsed.window.height.clamp(440.0, 4320.0);
     parsed
@@ -167,6 +229,17 @@ mod tests {
             },
             open_folder: Some(r"E:\Docs".to_string()),
             sidebar_tab: "files".to_string(),
+            wide_mode: true,
+            print: SavedPrintSettings {
+                destination: "Microsoft Print to PDF".to_string(),
+                theme_dark: true,
+                paper_size: "letter".to_string(),
+                landscape: true,
+                margin_mm: 7,
+                scale: 90,
+            },
+            font_family: "cairo".to_string(),
+            line_height: "relaxed".to_string(),
         };
         let json = serde_json::to_string(&state).unwrap();
         let decoded: SessionState = serde_json::from_str(&json).unwrap();
@@ -180,5 +253,15 @@ mod tests {
         assert_eq!(decoded.window, WindowState::default());
         assert_eq!(decoded.open_folder, None);
         assert_eq!(decoded.sidebar_tab, "outline");
+        assert!(!decoded.wide_mode);
+        assert_eq!(decoded.print, SavedPrintSettings::default());
+        assert_eq!(decoded.font_family, "system");
+        assert_eq!(decoded.line_height, "normal");
+        assert!(!decoded.print.theme_dark);
+        assert_eq!(decoded.print.destination, "__pdf__");
+        assert_eq!(decoded.print.paper_size, "a4");
+        assert!(!decoded.print.landscape);
+        assert_eq!(decoded.print.margin_mm, 14);
+        assert_eq!(decoded.print.scale, 100);
     }
 }

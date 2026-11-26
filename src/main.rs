@@ -1,23 +1,27 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod dwm;
+mod emoji;
 mod file_assoc;
 mod folder;
+mod font_assets;
 mod katex_assets;
 mod markdown;
+mod printing;
 mod session;
+mod single_instance;
 mod watcher;
 
 use std::{
     borrow::Cow,
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use http::{Response, StatusCode};
@@ -64,6 +68,24 @@ pub enum UserEvent {
     DropPaths(Vec<PathBuf>),
     PickedFiles(Vec<PathBuf>),
     PickedFolder(PathBuf),
+    PickedPdfOutput {
+        path: PathBuf,
+        options: printing::PrintOptions,
+    },
+    PickedSaveAs {
+        old_path: String,
+        new_path: PathBuf,
+        content: String,
+    },
+    PdfExported {
+        path: PathBuf,
+        success: bool,
+    },
+    PrintCompleted {
+        success: bool,
+        message: String,
+    },
+    ExternalOpen(Vec<PathBuf>),
     FileChanged(PathBuf),
     DragHover(bool),
     TitleChanged(String),
@@ -84,6 +106,23 @@ enum IpcMessage {
     SetTheme { dark: bool },
     OpenExternal { url: String },
     OpenRelativeLink { current_path: String, href: String },
+    GetPrinters,
+    RenderLivePreview {
+        path: String,
+        content: String,
+    },
+    SaveFile {
+        path: String,
+        content: String,
+    },
+    PrintDocument {
+        options: printing::PrintOptions,
+    },
+    ExportPdf {
+        suggested_name: String,
+        current_path: Option<String>,
+        options: printing::PrintOptions,
+    },
     SaveSession { session: session::SessionState },
 }
 
@@ -106,6 +145,10 @@ struct RestoredPayload {
     zoom: u32,
     folder: Option<folder::FolderTree>,
     sidebar_tab: String,
+    wide_mode: bool,
+    print: session::SavedPrintSettings,
+    font_family: String,
+    line_height: String,
 }
 
 fn webview_data_dir() -> PathBuf {
@@ -352,6 +395,10 @@ fn build_restored_payload(
         zoom: saved.zoom,
         folder,
         sidebar_tab: saved.sidebar_tab.clone(),
+        wide_mode: saved.wide_mode,
+        print: saved.print.clone(),
+        font_family: saved.font_family.clone(),
+        line_height: saved.line_height.clone(),
     }
 }
 
@@ -379,6 +426,50 @@ fn spawn_folder_picker(proxy: EventLoopProxy<UserEvent>) {
             .pick_folder()
         {
             let _ = proxy.send_event(UserEvent::PickedFolder(dir));
+        }
+    });
+}
+
+fn spawn_save_as_dialog(proxy: EventLoopProxy<UserEvent>, old_path: String, content: String) {
+    std::thread::spawn(move || {
+        if let Some(new_path) = rfd::FileDialog::new()
+            .set_title("Save Markdown File")
+            .add_filter("Markdown & Mermaid", &["md", "markdown", "mmd", "mermaid"])
+            .set_file_name("Untitled.md")
+            .save_file()
+        {
+            let _ = proxy.send_event(UserEvent::PickedSaveAs {
+                old_path,
+                new_path,
+                content,
+            });
+        }
+    });
+}
+
+fn spawn_pdf_save_dialog(
+    proxy: EventLoopProxy<UserEvent>,
+    suggested_name: String,
+    current_path: Option<String>,
+    options: printing::PrintOptions,
+) {
+    std::thread::spawn(move || {
+        let mut dialog = rfd::FileDialog::new()
+            .set_title("Export PDF")
+            .add_filter("PDF Document", &["pdf"])
+            .set_file_name(&suggested_name);
+        if let Some(dir) = current_path
+            .as_deref()
+            .and_then(|p| Path::new(p).parent())
+            .filter(|d| d.is_dir())
+        {
+            dialog = dialog.set_directory(dir);
+        }
+        if let Some(out_path) = dialog.save_file() {
+            let _ = proxy.send_event(UserEvent::PickedPdfOutput {
+                path: out_path,
+                options,
+            });
         }
     });
 }
@@ -448,11 +539,23 @@ fn main() {
         return;
     }
 
+    let mut cli_paths: Vec<PathBuf> = std::env::args_os()
+        .skip(1)
+        .filter(|arg| !arg.to_string_lossy().starts_with("--"))
+        .map(PathBuf::from)
+        .collect();
+
+    let _instance_guard = match single_instance::acquire_or_handoff(&cli_paths) {
+        single_instance::StartupRole::Primary(guard) => guard,
+        single_instance::StartupRole::HandedOff => return,
+    };
+
     let mut live_session = session::load();
     let initial_session = live_session.clone();
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
+    single_instance::spawn_ipc_listener(proxy.clone());
 
     let mut builder = WindowBuilder::new()
         .with_title("MDViewerByAli")
@@ -507,11 +610,7 @@ fn main() {
     });
 
     let mut file_watcher = watcher::FileWatcher::new(proxy.clone()).ok();
-    let cli_paths: Vec<PathBuf> = std::env::args_os()
-        .skip(1)
-        .filter(|arg| !arg.to_string_lossy().starts_with("--"))
-        .map(PathBuf::from)
-        .collect();
+    let mut last_self_saves: HashMap<String, Instant> = HashMap::new();
     let mut initialized = false;
     let mut webview_visible = false;
 
@@ -601,6 +700,11 @@ fn main() {
                                             katex_assets::lookup_katex_asset(path).unwrap();
                                         static_cached_response(bytes, mime)
                                     }
+                                    _ if font_assets::lookup_font_asset(path).is_some() => {
+                                        let (bytes, mime) =
+                                            font_assets::lookup_font_asset(path).unwrap();
+                                        static_cached_response(bytes, mime)
+                                    }
                                     _ => error_response(StatusCode::NOT_FOUND, "Not found"),
                                 }
                             })
@@ -659,6 +763,19 @@ fn main() {
                         open_file_paths(&paths, wv, &allowed_dirs, &mut file_watcher);
                     }
                 }
+                UserEvent::ExternalOpen(paths) => {
+                    let _keep_alive = &_instance_guard;
+                    window.set_minimized(false);
+                    window.set_focus();
+                    dwm::bring_window_to_front();
+                    if !paths.is_empty() {
+                        if initialized && let Some(wv) = webview.as_ref() {
+                            open_file_paths(&paths, wv, &allowed_dirs, &mut file_watcher);
+                        } else {
+                            cli_paths.extend(paths);
+                        }
+                    }
+                }
                 UserEvent::PickedFolder(dir) => {
                     if let Some(wv) = webview.as_ref()
                         && let Some(tree) = folder::scan_folder(&dir)
@@ -666,7 +783,95 @@ fn main() {
                         push_folder_to_webview(wv, &tree);
                     }
                 }
+                UserEvent::PickedPdfOutput { path, options } => {
+                    if let Some(wv) = webview.as_ref()
+                        && let Err(err) =
+                            printing::export_to_pdf(wv, path, &options, proxy.clone())
+                        && let Ok(msg_json) = serde_json::to_string(&err)
+                    {
+                        let _ = wv.evaluate_script(&format!(
+                            "window.__MDV_PRINT_DONE__(false, {msg_json});"
+                        ));
+                    }
+                }
+                UserEvent::PickedSaveAs {
+                    old_path,
+                    new_path,
+                    content,
+                } => {
+                    if let Some(wv) = webview.as_ref() {
+                        let canonical =
+                            fs::canonicalize(&new_path).unwrap_or_else(|_| new_path.clone());
+                        if let Err(err) = fs::write(&canonical, &content) {
+                            if let (Ok(op), Ok(e)) = (
+                                serde_json::to_string(&old_path),
+                                serde_json::to_string(&err.to_string()),
+                            ) {
+                                let _ = wv.evaluate_script(&format!(
+                                    "window.__MDV_FILE_SAVED__({op}, null, false, {e});"
+                                ));
+                            }
+                        } else {
+                            if let Some(parent) = canonical.parent()
+                                && let Ok(mut dirs) = allowed_dirs.lock()
+                            {
+                                dirs.insert(parent.to_path_buf());
+                            }
+                            if let Some(w) = file_watcher.as_mut() {
+                                w.watch(&canonical);
+                            }
+                            last_self_saves.insert(
+                                folder::normalize_path_str(&canonical).to_ascii_lowercase(),
+                                Instant::now(),
+                            );
+                            let rendered = markdown::render_document(&content, &canonical);
+                            if let (Ok(op), Ok(doc_json)) = (
+                                serde_json::to_string(&old_path),
+                                serde_json::to_string(&rendered),
+                            ) {
+                                let _ = wv.evaluate_script(&format!(
+                                    "window.__MDV_FILE_SAVED__({op}, {doc_json}, true, null);"
+                                ));
+                            }
+                        }
+                    }
+                }
+                UserEvent::PdfExported { path, success } => {
+                    if let Some(wv) = webview.as_ref() {
+                        let name = path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("document.pdf");
+                        let msg = if success {
+                            format!("Exported PDF: {name}")
+                        } else {
+                            format!("Failed to export PDF: {name}")
+                        };
+                        if let Ok(msg_json) = serde_json::to_string(&msg) {
+                            let is_ok = if success { "true" } else { "false" };
+                            let _ = wv.evaluate_script(&format!(
+                                "window.__MDV_PRINT_DONE__({is_ok}, {msg_json});"
+                            ));
+                        }
+                    }
+                }
+                UserEvent::PrintCompleted { success, message } => {
+                    if let Some(wv) = webview.as_ref()
+                        && let Ok(msg_json) = serde_json::to_string(&message)
+                    {
+                        let is_ok = if success { "true" } else { "false" };
+                        let _ = wv.evaluate_script(&format!(
+                            "window.__MDV_PRINT_DONE__({is_ok}, {msg_json});"
+                        ));
+                    }
+                }
                 UserEvent::FileChanged(path) => {
+                    let key = folder::normalize_path_str(&path).to_ascii_lowercase();
+                    if let Some(t) = last_self_saves.get(&key)
+                        && t.elapsed() < Duration::from_millis(1200)
+                    {
+                        return;
+                    }
                     if let Some(wv) = webview.as_ref()
                         && let Ok(content) = fs::read_to_string(&path)
                     {
@@ -753,6 +958,78 @@ fn main() {
                         }
                         IpcMessage::OpenExternal { url } => {
                             dwm::open_external_url(&url);
+                        }
+                        IpcMessage::GetPrinters => {
+                            if let Some(wv) = webview.as_ref() {
+                                let info = printing::list_printers();
+                                if let Ok(json) = serde_json::to_string(&info) {
+                                    let _ = wv.evaluate_script(&format!(
+                                        "window.__MDV_SET_PRINTERS__({json});"
+                                    ));
+                                }
+                            }
+                        }
+                        IpcMessage::RenderLivePreview { path, content } => {
+                            if let Some(wv) = webview.as_ref() {
+                                let rendered = markdown::render_document(&content, Path::new(&path));
+                                push_doc_to_webview(wv, "__MDV_LIVE_PREVIEW__", &rendered);
+                            }
+                        }
+                        IpcMessage::SaveFile { path, content } => {
+                            if let Some(wv) = webview.as_ref() {
+                                if path.is_empty() || path == "Welcome-Demo.md" {
+                                    spawn_save_as_dialog(proxy.clone(), path, content);
+                                } else {
+                                    let target = PathBuf::from(&path);
+                                    if let Err(err) = fs::write(&target, &content) {
+                                        if let (Ok(op), Ok(e)) = (
+                                            serde_json::to_string(&path),
+                                            serde_json::to_string(&err.to_string()),
+                                        ) {
+                                            let _ = wv.evaluate_script(&format!(
+                                                "window.__MDV_FILE_SAVED__({op}, null, false, {e});"
+                                            ));
+                                        }
+                                    } else {
+                                        last_self_saves.insert(
+                                            folder::normalize_path_str(&target).to_ascii_lowercase(),
+                                            Instant::now(),
+                                        );
+                                        let rendered = markdown::render_document(&content, &target);
+                                        if let (Ok(op), Ok(doc_json)) = (
+                                            serde_json::to_string(&path),
+                                            serde_json::to_string(&rendered),
+                                        ) {
+                                            let _ = wv.evaluate_script(&format!(
+                                                "window.__MDV_FILE_SAVED__({op}, {doc_json}, true, null);"
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        IpcMessage::PrintDocument { options } => {
+                            if let Some(wv) = webview.as_ref()
+                                && let Err(err) =
+                                    printing::print_silently(wv, &options, proxy.clone())
+                                && let Ok(msg_json) = serde_json::to_string(&err)
+                            {
+                                let _ = wv.evaluate_script(&format!(
+                                    "window.__MDV_PRINT_DONE__(false, {msg_json});"
+                                ));
+                            }
+                        }
+                        IpcMessage::ExportPdf {
+                            suggested_name,
+                            current_path,
+                            options,
+                        } => {
+                            spawn_pdf_save_dialog(
+                                proxy.clone(),
+                                suggested_name,
+                                current_path,
+                                options,
+                            );
                         }
                         IpcMessage::OpenRelativeLink { current_path, href } => {
                             if let Some(wv) = webview.as_ref() {

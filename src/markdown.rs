@@ -28,6 +28,7 @@ pub struct RenderedDoc {
     pub filename: String,
     pub is_mermaid: bool,
     pub html: String,
+    pub raw_markdown: String,
     pub toc: Vec<TocItem>,
     pub stats: DocStats,
 }
@@ -112,7 +113,11 @@ fn resolve_local_image_url(dest: &str, base_dir: Option<&Path>) -> Option<String
         return None;
     }
 
-    let raw_path = trimmed.split(['?', '#']).next().unwrap_or(trimmed);
+    let (before_frag, fragment) = match trimmed.split_once('#') {
+        Some((before, frag)) => (before, Some(frag)),
+        None => (trimmed, None),
+    };
+    let raw_path = before_frag.split('?').next().unwrap_or(before_frag);
     let candidate = Path::new(raw_path);
     let resolved: PathBuf = if candidate.is_absolute() {
         candidate.to_path_buf()
@@ -123,7 +128,14 @@ fn resolve_local_image_url(dest: &str, base_dir: Option<&Path>) -> Option<String
     };
 
     let encoded = url_encode_path(&resolved.to_string_lossy());
-    Some(format!("http://mdviewer.localhost/local-file?path={encoded}"))
+    let mut url = format!("http://mdviewer.localhost/local-file?path={encoded}");
+    if let Some(frag) = fragment
+        && !frag.is_empty()
+    {
+        url.push('#');
+        url.push_str(frag);
+    }
+    Some(url)
 }
 
 fn slugify_heading(text: &str) -> String {
@@ -176,6 +188,65 @@ fn trim_matched_url(raw: &str) -> &str {
     &raw[..end]
 }
 
+fn emit_plain_with_emoji(plain: &str, out: &mut Vec<Event<'_>>) {
+    let replaced = crate::emoji::replace_emoji_shortcodes(plain);
+    out.push(Event::Text(CowStr::from(replaced.into_owned())));
+}
+
+fn try_match_bare_email(text: &str, pos: usize) -> Option<&str> {
+    let rest = &text[pos..];
+    let bytes = rest.as_bytes();
+    let first = *bytes.first()?;
+    if !(first.is_ascii_alphanumeric() || matches!(first, b'_' | b'-')) {
+        return None;
+    }
+
+    let valid_boundary = text[..pos]
+        .chars()
+        .next_back()
+        .is_none_or(|c| !c.is_alphanumeric() && !matches!(c, '_' | '@' | '.' | '/'));
+    if !valid_boundary {
+        return None;
+    }
+
+    let mut i = 0usize;
+    while i < bytes.len()
+        && (bytes[i].is_ascii_alphanumeric() || matches!(bytes[i], b'.' | b'_' | b'%' | b'+' | b'-'))
+    {
+        i += 1;
+    }
+    if i == 0 || i >= bytes.len() || bytes[i] != b'@' {
+        return None;
+    }
+    let local = &rest[..i];
+    if local.starts_with('.') || local.ends_with('.') || local.contains("..") {
+        return None;
+    }
+
+    let dom_start = i + 1;
+    let mut j = dom_start;
+    while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || matches!(bytes[j], b'.' | b'-')) {
+        j += 1;
+    }
+    while j > dom_start && matches!(bytes[j - 1], b'.' | b'-') {
+        j -= 1;
+    }
+    let domain = &rest[dom_start..j];
+    if !domain.contains('.') || domain.starts_with('.') || domain.contains("..") {
+        return None;
+    }
+    let tld = domain.rsplit('.').next().unwrap_or("");
+    if tld.len() < 2 || !tld.chars().all(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    if let Some(next_ch) = rest[j..].chars().next()
+        && (next_ch.is_alphanumeric() || matches!(next_ch, '@' | '/'))
+    {
+        return None;
+    }
+    Some(&rest[..j])
+}
+
 fn push_autolinked_text(text: &str, out: &mut Vec<Event<'_>>) {
     let mut last_emitted = 0usize;
     let mut pos = 0usize;
@@ -225,7 +296,7 @@ fn push_autolinked_text(text: &str, out: &mut Vec<Event<'_>>) {
 
             if valid_host {
                 if pos > last_emitted {
-                    out.push(Event::Text(CowStr::from(text[last_emitted..pos].to_string())));
+                    emit_plain_with_emoji(&text[last_emitted..pos], out);
                 }
                 let href = if prepend_https {
                     format!("https://{candidate}")
@@ -242,6 +313,18 @@ fn push_autolinked_text(text: &str, out: &mut Vec<Event<'_>>) {
                 pos = consumed_end;
                 continue;
             }
+        } else if let Some(email) = try_match_bare_email(text, pos) {
+            if pos > last_emitted {
+                emit_plain_with_emoji(&text[last_emitted..pos], out);
+            }
+            let escaped = html_escape(email);
+            out.push(Event::Html(CowStr::from(format!(
+                "<a href=\"mailto:{escaped}\">{escaped}</a>"
+            ))));
+            let consumed_end = pos + email.len();
+            last_emitted = consumed_end;
+            pos = consumed_end;
+            continue;
         }
 
         let step = rest.chars().next().map_or(1, char::len_utf8);
@@ -249,10 +332,89 @@ fn push_autolinked_text(text: &str, out: &mut Vec<Event<'_>>) {
     }
 
     if last_emitted == 0 {
-        out.push(Event::Text(CowStr::from(text.to_string())));
+        emit_plain_with_emoji(text, out);
     } else if last_emitted < text.len() {
-        out.push(Event::Text(CowStr::from(text[last_emitted..].to_string())));
+        emit_plain_with_emoji(&text[last_emitted..], out);
     }
+}
+
+fn render_frontmatter_html(raw: &str) -> String {
+    let mut entries: Vec<(String, String)> = Vec::new();
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if (line.starts_with(' ') || line.starts_with('\t')) && trimmed.starts_with('-') {
+            let item = trimmed.trim_start_matches('-').trim();
+            if !item.is_empty()
+                && let Some((_, prev_val)) = entries.last_mut()
+            {
+                if prev_val.is_empty() {
+                    prev_val.push_str(item);
+                } else {
+                    prev_val.push_str(", ");
+                    prev_val.push_str(item);
+                }
+            }
+            continue;
+        }
+        if let Some((k, v)) = trimmed.split_once(':') {
+            let key = k.trim();
+            if !key.is_empty() {
+                let mut val = v.trim();
+                if ((val.starts_with('"') && val.ends_with('"'))
+                    || (val.starts_with('\'') && val.ends_with('\'')))
+                    && val.len() >= 2
+                {
+                    val = &val[1..val.len() - 1];
+                }
+                entries.push((key.to_string(), val.to_string()));
+            }
+        }
+    }
+
+    if entries.is_empty() {
+        let escaped = html_escape(raw.trim());
+        return format!("<div class=\"mdv-frontmatter\"><pre><code>{escaped}</code></pre></div>\n");
+    }
+
+    let mut rows = String::new();
+    for (k, v) in entries {
+        rows.push_str("<tr><th>");
+        rows.push_str(&html_escape(&k));
+        rows.push_str("</th><td>");
+        rows.push_str(&html_escape(&v));
+        rows.push_str("</td></tr>");
+    }
+    format!(
+        "<div class=\"mdv-frontmatter\"><div class=\"mdv-frontmatter-label\">Metadata</div><table><thead><tr><th>Property</th><th>Value</th></tr></thead><tbody>{rows}</tbody></table></div>\n"
+    )
+}
+
+fn render_diff_block(code: &str) -> String {
+    let trimmed = code.strip_suffix('\n').unwrap_or(code);
+    let mut lines_html = String::with_capacity(code.len() * 2);
+    for line in trimmed.split('\n') {
+        let clean = line.strip_suffix('\r').unwrap_or(line);
+        let cls = if clean.starts_with('+') && !clean.starts_with("+++") {
+            "diff-line diff-add"
+        } else if clean.starts_with('-') && !clean.starts_with("---") {
+            "diff-line diff-del"
+        } else if clean.starts_with("@@") {
+            "diff-line diff-hunk"
+        } else {
+            "diff-line"
+        };
+        lines_html.push_str("<span class=\"");
+        lines_html.push_str(cls);
+        lines_html.push_str("\">");
+        lines_html.push_str(&html_escape(clean));
+        lines_html.push_str("\n</span>");
+    }
+    format!(
+        "<div class=\"code-block\"><div class=\"code-header\"><span class=\"code-lang\">diff</span><button type=\"button\" class=\"copy-btn\" title=\"Copy code\">Copy</button></div><pre><code class=\"language-diff mdv-diff\">{lines_html}</code></pre></div>\n"
+    )
 }
 
 fn alert_meta(kind: BlockQuoteKind) -> (&'static str, &'static str, &'static str) {
@@ -309,6 +471,7 @@ pub fn render_document(content: &str, path: &Path) -> RenderedDoc {
             filename,
             is_mermaid: true,
             html,
+            raw_markdown: content.to_string(),
             toc: Vec::new(),
             stats,
         };
@@ -320,13 +483,17 @@ pub fn render_document(content: &str, path: &Path) -> RenderedDoc {
         | Options::ENABLE_TASKLISTS
         | Options::ENABLE_SMART_PUNCTUATION
         | Options::ENABLE_MATH
-        | Options::ENABLE_GFM;
+        | Options::ENABLE_GFM
+        | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS;
 
     let base_dir = path.parent().filter(|p| !p.as_os_str().is_empty());
     let parser = Parser::new_ext(content, options);
 
     let mut toc = Vec::new();
     let mut transformed: Vec<Event<'_>> = Vec::new();
+
+    let mut in_metadata = false;
+    let mut metadata_buffer = String::new();
 
     let mut in_heading: Option<u8> = None;
     let mut heading_events: Vec<Event<'_>> = Vec::new();
@@ -338,12 +505,29 @@ pub fn render_document(content: &str, path: &Path) -> RenderedDoc {
     let mut in_link: usize = 0;
 
     for event in parser {
+        if in_metadata {
+            match event {
+                Event::End(TagEnd::MetadataBlock(_)) => {
+                    in_metadata = false;
+                    transformed.push(Event::Html(CowStr::from(render_frontmatter_html(
+                        &metadata_buffer,
+                    ))));
+                    metadata_buffer.clear();
+                }
+                Event::Text(t) => metadata_buffer.push_str(&t),
+                Event::SoftBreak | Event::HardBreak => metadata_buffer.push('\n'),
+                _ => {}
+            }
+            continue;
+        }
+
         if let Some(level) = in_heading {
             match event {
                 Event::End(TagEnd::Heading(_)) => {
                     let id = format!("h-{}", toc.len());
                     let text = heading_text.trim().to_string();
                     let slug = slugify_heading(&text);
+                    let escaped_slug = html_escape(&slug);
                     toc.push(TocItem {
                         id: id.clone(),
                         level,
@@ -353,27 +537,34 @@ pub fn render_document(content: &str, path: &Path) -> RenderedDoc {
                     let mut inner_html = String::new();
                     pulldown_cmark::html::push_html(&mut inner_html, heading_events.drain(..));
                     transformed.push(Event::Html(CowStr::from(format!(
-                        "<h{level} id=\"{id}\" data-slug=\"{}\" dir=\"auto\">{inner_html}</h{level}>\n",
-                        html_escape(&slug)
+                        "<h{level} id=\"{id}\" data-slug=\"{escaped_slug}\" dir=\"auto\"><a class=\"mdv-heading-anchor\" href=\"#{escaped_slug}\" title=\"Copy section link\" aria-hidden=\"true\">#</a>{inner_html}</h{level}>\n"
                     ))));
                     heading_text.clear();
                     in_heading = None;
                 }
                 ev => {
-                    match &ev {
-                        Event::Text(t) | Event::Code(t) | Event::InlineMath(t) => {
-                            heading_text.push_str(t)
+                    match ev {
+                        Event::Text(t) => {
+                            let replaced = crate::emoji::replace_emoji_shortcodes(&t);
+                            heading_text.push_str(&replaced);
+                            heading_events.push(Event::Text(CowStr::from(replaced.into_owned())));
                         }
-                        Event::SoftBreak | Event::HardBreak => heading_text.push(' '),
-                        _ => {}
-                    }
-                    if let Event::InlineMath(tex) = ev {
-                        let escaped = html_escape(&tex);
-                        heading_events.push(Event::Html(CowStr::from(format!(
-                            "<span class=\"mdv-math-inline\">{escaped}</span>"
-                        ))));
-                    } else {
-                        heading_events.push(ev);
+                        Event::InlineMath(tex) => {
+                            heading_text.push_str(&tex);
+                            let escaped = html_escape(&tex);
+                            heading_events.push(Event::Html(CowStr::from(format!(
+                                "<span class=\"mdv-math-inline\">{escaped}</span>"
+                            ))));
+                        }
+                        Event::Code(t) => {
+                            heading_text.push_str(&t);
+                            heading_events.push(Event::Code(t));
+                        }
+                        Event::SoftBreak | Event::HardBreak => {
+                            heading_text.push(' ');
+                            heading_events.push(ev);
+                        }
+                        other => heading_events.push(other),
                     }
                 }
             }
@@ -384,13 +575,24 @@ pub fn render_document(content: &str, path: &Path) -> RenderedDoc {
             match event {
                 Event::End(TagEnd::CodeBlock) => {
                     let lang_clean = lang.trim();
-                    if lang_clean.eq_ignore_ascii_case("mermaid") {
+                    let lang_token = lang_clean.split_whitespace().next().unwrap_or("");
+                    if lang_token.eq_ignore_ascii_case("mermaid") {
                         let escaped = html_escape(code_buffer.trim());
                         transformed.push(Event::Html(CowStr::from(format!(
                             "<div class=\"mermaid\">{escaped}</div>\n"
                         ))));
+                    } else if lang_token.eq_ignore_ascii_case("math")
+                        || lang_token.eq_ignore_ascii_case("latex")
+                    {
+                        let escaped = html_escape(code_buffer.trim());
+                        transformed.push(Event::Html(CowStr::from(format!(
+                            "<div class=\"mdv-math-display\">{escaped}</div>\n"
+                        ))));
+                    } else if lang_token.eq_ignore_ascii_case("diff") {
+                        transformed.push(Event::Html(CowStr::from(render_diff_block(
+                            &code_buffer,
+                        ))));
                     } else {
-                        let lang_token = lang_clean.split_whitespace().next().unwrap_or("");
                         let lang_label = if lang_token.is_empty() {
                             "text"
                         } else {
@@ -418,6 +620,10 @@ pub fn render_document(content: &str, path: &Path) -> RenderedDoc {
         }
 
         match event {
+            Event::Start(Tag::MetadataBlock(_)) => {
+                in_metadata = true;
+                metadata_buffer.clear();
+            }
             Event::Start(Tag::Heading { level, .. }) => {
                 in_heading = Some(heading_level_num(level));
                 heading_events.clear();
@@ -490,6 +696,9 @@ pub fn render_document(content: &str, path: &Path) -> RenderedDoc {
             Event::Text(text) if in_link == 0 => {
                 push_autolinked_text(&text, &mut transformed);
             }
+            Event::Text(text) => {
+                emit_plain_with_emoji(&text, &mut transformed);
+            }
             other => transformed.push(other),
         }
     }
@@ -502,6 +711,7 @@ pub fn render_document(content: &str, path: &Path) -> RenderedDoc {
         filename,
         is_mermaid: false,
         html,
+        raw_markdown: content.to_string(),
         toc,
         stats,
     }
@@ -595,7 +805,7 @@ mod tests {
         assert_eq!(doc.toc[1].text, "Sub Section");
         assert!(
             doc.html
-                .contains("<h1 id=\"h-0\" data-slug=\"عنوان-رئيسي\" dir=\"auto\">عنوان رئيسي</h1>")
+                .contains(r##"<h1 id="h-0" data-slug="عنوان-رئيسي" dir="auto"><a class="mdv-heading-anchor" href="#عنوان-رئيسي" title="Copy section link" aria-hidden="true">#</a>عنوان رئيسي</h1>"##)
         );
     }
 
@@ -666,5 +876,42 @@ mod tests {
         let doc = render_document(md, Path::new("slugs.md"));
         assert!(doc.html.contains(r#"id="h-0" data-slug="first-heading""#));
         assert!(doc.html.contains(r#"id="h-1" data-slug="القسم-الأول""#));
+    }
+
+    #[test]
+    fn renders_yaml_frontmatter_as_table() {
+        let md = "---\ntitle: \"Guide\"\ntags:\n  - rust\n  - markdown\n---\n\n# Body\n";
+        let doc = render_document(md, Path::new("fm.md"));
+        assert!(doc.html.contains(r#"<div class="mdv-frontmatter">"#));
+        assert!(doc.html.contains("<th>title</th><td>Guide</td>"));
+        assert!(doc.html.contains("<th>tags</th><td>rust, markdown</td>"));
+    }
+
+    #[test]
+    fn renders_fenced_math_and_diff_blocks() {
+        let md = "```math\ny = mx + b\n```\n\n```diff\n-old line\n+new line\n@@ -1,2 +1,2 @@\n```\n";
+        let doc = render_document(md, Path::new("blocks.md"));
+        assert!(doc.html.contains(r#"<div class="mdv-math-display">y = mx + b</div>"#));
+        assert!(doc.html.contains(r#"class="language-diff mdv-diff""#));
+        assert!(doc.html.contains(r#"<span class="diff-line diff-del">-old line"#));
+        assert!(doc.html.contains(r#"<span class="diff-line diff-add">+new line"#));
+        assert!(doc.html.contains(r#"<span class="diff-line diff-hunk">@@ -1,2 +1,2 @@"#));
+    }
+
+    #[test]
+    fn replaces_emoji_shortcodes_and_autolinks_emails() {
+        let md = ":rocket: Contact ali@example.com or visit https://example.com:8080/app\n";
+        let doc = render_document(md, Path::new("emoji_mail.md"));
+        assert!(doc.html.contains("🚀"));
+        assert!(doc.html.contains(r#"<a href="mailto:ali@example.com">ali@example.com</a>"#));
+        assert!(doc.html.contains(r#"<a href="https://example.com:8080/app">https://example.com:8080/app</a>"#));
+    }
+
+    #[test]
+    fn preserves_theme_fragment_on_local_images() {
+        let md = "![logo](logo-dark.png#gh-dark-mode-only)\n";
+        let doc = render_document(md, Path::new(r"E:\Docs\readme.md"));
+        assert!(doc.html.contains("local-file?path="));
+        assert!(doc.html.contains("#gh-dark-mode-only"));
     }
 }

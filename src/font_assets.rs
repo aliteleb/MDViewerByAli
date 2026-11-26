@@ -1,0 +1,35 @@
+/// Offline embedded Arabic & English font subsets (WOFF2 + CSS).
+pub fn lookup_font_asset(path: &str) -> Option<(&'static [u8], &'static str)> {
+    match path {
+        "/vendor/fonts/fonts.css" => Some((
+            include_bytes!("../assets/vendor/fonts/fonts.css"),
+            "text/css; charset=utf-8",
+        )),
+        "/vendor/fonts/amiri-arabic-400.woff2" => Some((include_bytes!("../assets/vendor/fonts/amiri-arabic-400.woff2"), "font/woff2")),
+        "/vendor/fonts/amiri-latin-400.woff2" => Some((include_bytes!("../assets/vendor/fonts/amiri-latin-400.woff2"), "font/woff2")),
+        "/vendor/fonts/amiri-arabic-700.woff2" => Some((include_bytes!("../assets/vendor/fonts/amiri-arabic-700.woff2"), "font/woff2")),
+        "/vendor/fonts/amiri-latin-700.woff2" => Some((include_bytes!("../assets/vendor/fonts/amiri-latin-700.woff2"), "font/woff2")),
+        "/vendor/fonts/cairo-arabic-400.woff2" => Some((include_bytes!("../assets/vendor/fonts/cairo-arabic-400.woff2"), "font/woff2")),
+        "/vendor/fonts/cairo-latin-400.woff2" => Some((include_bytes!("../assets/vendor/fonts/cairo-latin-400.woff2"), "font/woff2")),
+        "/vendor/fonts/cairo-arabic-600.woff2" => Some((include_bytes!("../assets/vendor/fonts/cairo-arabic-600.woff2"), "font/woff2")),
+        "/vendor/fonts/cairo-latin-600.woff2" => Some((include_bytes!("../assets/vendor/fonts/cairo-latin-600.woff2"), "font/woff2")),
+        "/vendor/fonts/cairo-arabic-700.woff2" => Some((include_bytes!("../assets/vendor/fonts/cairo-arabic-700.woff2"), "font/woff2")),
+        "/vendor/fonts/cairo-latin-700.woff2" => Some((include_bytes!("../assets/vendor/fonts/cairo-latin-700.woff2"), "font/woff2")),
+        "/vendor/fonts/ibm-plex-sans-arabic-arabic-400.woff2" => Some((include_bytes!("../assets/vendor/fonts/ibm-plex-sans-arabic-arabic-400.woff2"), "font/woff2")),
+        "/vendor/fonts/ibm-plex-sans-arabic-latin-400.woff2" => Some((include_bytes!("../assets/vendor/fonts/ibm-plex-sans-arabic-latin-400.woff2"), "font/woff2")),
+        "/vendor/fonts/ibm-plex-sans-arabic-arabic-600.woff2" => Some((include_bytes!("../assets/vendor/fonts/ibm-plex-sans-arabic-arabic-600.woff2"), "font/woff2")),
+        "/vendor/fonts/ibm-plex-sans-arabic-latin-600.woff2" => Some((include_bytes!("../assets/vendor/fonts/ibm-plex-sans-arabic-latin-600.woff2"), "font/woff2")),
+        "/vendor/fonts/ibm-plex-sans-arabic-arabic-700.woff2" => Some((include_bytes!("../assets/vendor/fonts/ibm-plex-sans-arabic-arabic-700.woff2"), "font/woff2")),
+        "/vendor/fonts/ibm-plex-sans-arabic-latin-700.woff2" => Some((include_bytes!("../assets/vendor/fonts/ibm-plex-sans-arabic-latin-700.woff2"), "font/woff2")),
+        "/vendor/fonts/inter-latin-400.woff2" => Some((include_bytes!("../assets/vendor/fonts/inter-latin-400.woff2"), "font/woff2")),
+        "/vendor/fonts/inter-latin-600.woff2" => Some((include_bytes!("../assets/vendor/fonts/inter-latin-600.woff2"), "font/woff2")),
+        "/vendor/fonts/inter-latin-700.woff2" => Some((include_bytes!("../assets/vendor/fonts/inter-latin-700.woff2"), "font/woff2")),
+        "/vendor/fonts/merriweather-latin-400.woff2" => Some((include_bytes!("../assets/vendor/fonts/merriweather-latin-400.woff2"), "font/woff2")),
+        "/vendor/fonts/merriweather-latin-700.woff2" => Some((include_bytes!("../assets/vendor/fonts/merriweather-latin-700.woff2"), "font/woff2")),
+        "/vendor/fonts/tajawal-arabic-400.woff2" => Some((include_bytes!("../assets/vendor/fonts/tajawal-arabic-400.woff2"), "font/woff2")),
+        "/vendor/fonts/tajawal-latin-400.woff2" => Some((include_bytes!("../assets/vendor/fonts/tajawal-latin-400.woff2"), "font/woff2")),
+        "/vendor/fonts/tajawal-arabic-700.woff2" => Some((include_bytes!("../assets/vendor/fonts/tajawal-arabic-700.woff2"), "font/woff2")),
+        "/vendor/fonts/tajawal-latin-700.woff2" => Some((include_bytes!("../assets/vendor/fonts/tajawal-latin-700.woff2"), "font/woff2")),
+        _ => None,
+    }
+}

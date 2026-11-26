@@ -1232,7 +1232,7 @@ dependencies = [
 
 [[package]]
 name = "mdviewer-by-ali"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "embed-resource",
  "http",
@@ -1242,6 +1242,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tao",
+ "webview2-com",
  "windows",
  "wry",
 ]

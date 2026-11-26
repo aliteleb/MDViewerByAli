@@ -36,7 +36,7 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "ISCC.exe failed with exit code $LASTEXITCODE"
     }
-    $setupExe = Join-Path $root "dist\MDViewerByAli-0.2.0-Setup.exe"
+    $setupExe = Join-Path $root "dist\MDViewerByAli-0.3.0-Setup.exe"
     if (-not (Test-Path $setupExe)) {
         throw "Installer output missing: $setupExe"
     }

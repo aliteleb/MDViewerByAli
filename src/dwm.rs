@@ -259,3 +259,33 @@ pub fn open_external_url(url: &str) {
 
 #[cfg(not(windows))]
 pub fn open_external_url(_url: &str) {}
+
+#[cfg(windows)]
+pub fn bring_window_to_front() {
+    use windows::Win32::Foundation::{HWND, LPARAM};
+    use windows::Win32::System::Threading::GetCurrentThreadId;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumThreadWindows, IsIconic, IsWindowVisible, SW_RESTORE, SetForegroundWindow, ShowWindow,
+    };
+    use windows::core::BOOL;
+
+    unsafe extern "system" fn focus_one(hwnd: HWND, _lparam: LPARAM) -> BOOL {
+        if unsafe { IsWindowVisible(hwnd).as_bool() } {
+            unsafe {
+                if IsIconic(hwnd).as_bool() {
+                    let _ = ShowWindow(hwnd, SW_RESTORE);
+                }
+                let _ = SetForegroundWindow(hwnd);
+            }
+            return BOOL(0);
+        }
+        BOOL(1)
+    }
+
+    unsafe {
+        let _ = EnumThreadWindows(GetCurrentThreadId(), Some(focus_one), LPARAM(0));
+    }
+}
+
+#[cfg(not(windows))]
+pub fn bring_window_to_front() {}

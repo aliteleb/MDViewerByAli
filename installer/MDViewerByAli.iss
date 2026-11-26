@@ -1,5 +1,5 @@
 #define MyAppName "MDViewerByAli"
-#define MyAppVersion "0.2.0"
+#define MyAppVersion "0.3.0"
 #define MyAppPublisher "Ali"
 #define MyAppExeName "MDViewerByAli.exe"
 
@@ -12,7 +12,7 @@ DefaultDirName={localappdata}\Programs\{#MyAppName}
 DefaultGroupName={#MyAppName}
 PrivilegesRequired=lowest
 OutputDir=..\dist
-OutputBaseFilename=MDViewerByAli-0.2.0-Setup
+OutputBaseFilename=MDViewerByAli-0.3.0-Setup
 SetupIconFile=..\assets\app\icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName},0
 UninstallDisplayName={#MyAppName}
